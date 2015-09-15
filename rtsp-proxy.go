@@ -3,8 +3,6 @@ package main
 import (
 	"bufio"
 	"fmt"
-	"github.com/bitly/go-simplejson"
-	"github.com/oguzbilgic/socketio"
 	"io"
 	"log"
 	"net"
@@ -14,48 +12,7 @@ import (
 	"strings"
 )
 
-const SOCKETIO_EVENT = 5
-
-func connectToWeblights() {
-	// Open a new client connection to the given socket.io server
-	// Connect to the given channel on the socket.io server
-	socket, err := socketio.Dial("http://weblights.ehrat.farm:80")
-
-	if err != nil {
-		panic(err)
-	}
-
-	for {
-		// Receive socketio.Message from the server
-		msg, err := socket.Receive()
-		if err != nil {
-			log.Println("Could not receive socket.io message")
-			panic(err)
-		}
-
-		if msg.Type != SOCKETIO_EVENT {
-			continue
-		}
-		json, err := simplejson.NewJson([]byte(msg.Data))
-		if err != nil {
-			log.Println("Could not parse JSON")
-			panic(err)
-		}
-
-		//log.Println(jerr)
-		name, _ := json.Get("name").String()
-		if name == "dc_lights" {
-			status, _ := json.Get("args").GetIndex(0).Bool()
-			log.Printf("dc_lights: %t\n", status)
-		}
-
-		//fmt.Printf("Type: %v, ID: '%s', Endpoint: '%s', Data: '%s' \n", msg.Type, msg.ID, msg.Endpoint, msg.Data)
-	}
-}
-
 func main() {
-	//	go connectToWeblights()
-
 	port := "554"
 
 	ln, err := net.Listen("tcp", ":"+port)
