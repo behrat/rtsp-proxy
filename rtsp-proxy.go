@@ -42,7 +42,6 @@ func handleFrontend(conn net.Conn) {
 	request_line, err := buf_reader.ReadString('\n')
 	if err != nil {
 		clog.Println("Error reading request: ", err.Error())
-		clog.Println("Closing")
 		conn.Close()
 		return
 	}
@@ -56,12 +55,12 @@ func handleFrontend(conn net.Conn) {
 		return
 	}
 
-	request_str := request_params[0]
+	//request_str := request_params[0]
 	method := request_params[1]
 	uri := request_params[2]
 	rtsp_version := request_params[3]
 
-	clog.Printf("Request: %s", request_str) // Already has /n
+	//clog.Printf("Request: %s", request_str) // Already has /n
 
 	if method != "OPTIONS" {
 		clog.Printf("Received method %s instead of OPTIONS\n", request_params[0])
@@ -88,16 +87,18 @@ func handleFrontend(conn net.Conn) {
 
 	hostport := strings.Split(url.Host, ":")
 	forward_host := hostport[0] + ":554"
-	clog.Println("Forwarding to host: ", forward_host)
+	clog.Println("Forwarding to ", forward_host)
 
 	forward_conn, err := net.Dial("tcp", forward_host)
 	if err != nil {
-		clog.Printf("Could not connect to forward host %s. %s\n", forward_host, err.Error())
+		clog.Printf("Could not connect to forward host %s. %s\n",
+			forward_host, err.Error())
 		clog.Println("Closing")
 		conn.Close()
 		return
 	}
 
+	// Write the request line forward
 	_, err = forward_conn.Write([]byte(request_line))
 	if err != nil {
 		clog.Printf("Could not write forward request: %s\n", err)
@@ -107,24 +108,26 @@ func handleFrontend(conn net.Conn) {
 		return
 	}
 
+	// Forward server -> client
 	reverse_chan := make(chan int64)
 	go connCopy(forward_conn, conn, clog, reverse_chan)
 
+	// Forward client -> server
 	forward_bytes, err := buf_reader.WriteTo(forward_conn)
 	if err != nil {
-		clog.Printf("Forward copy error: %s\n", err)
+		clog.Printf("Client closed connection: %s\n", err)
 	}
-	clog.Printf("Wrote %d bytes to forward connection\n", forward_bytes+int64(len(request_line)))
+	//clog.Printf("Wrote %d bytes to forward connection\n", forward_bytes+int64(len(request_line)))
 
-	if err := forward_conn.Close(); err != nil {
-		clog.Printf("Forward conn close error: %s", err)
-	}
-	if err := conn.Close(); err != nil {
-		clog.Printf("Reverse conn close error: %s", err)
-	}
+	// close all connections discarding errors
+	// this is force the other thread to close
+	_ = forward_conn.Close()
+	_ = conn.Close()
+
+	// get reverse bytes from oother thread
 	reverse_bytes := <-reverse_chan
-	clog.Printf("Forward thread got reverse_bytes: %d\n", reverse_bytes)
-
+	clog.Printf("Wrote %d bytes to client and %d bytes to server\n",
+		reverse_bytes, forward_bytes)
 }
 
 // This does the actual data transfer.
@@ -135,18 +138,15 @@ func connCopy(src, dst net.Conn, clog *log.Logger, reverse_chan chan int64) {
 	// net.Conn->net.Conn transfers, which aren't needed). This would also let
 	// us adjust buffersize.
 	reverse_bytes, err := io.Copy(dst, src)
-
 	if err != nil {
-		clog.Printf("Reverse copy error: %s", err)
+		clog.Printf("Server closed connection: %s", err)
 	}
 
-	if err := src.Close(); err != nil {
-		clog.Printf("Reverse src close error: %s", err)
-	}
-	if err := dst.Close(); err != nil {
-		clog.Printf("Reverse dst close error: %s", err)
-	}
+	// close all connections discarding errors
+	// this is force the other thread to close
+	src.Close()
+	dst.Close()
 
-	clog.Printf("Wrote %d bytes to reverse connection\n", reverse_bytes)
+	//clog.Printf("Wrote %d bytes to reverse connection\n", reverse_bytes)
 	reverse_chan <- reverse_bytes
 }
