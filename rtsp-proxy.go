@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -12,12 +13,27 @@ import (
 	"strings"
 )
 
-func main() {
-	port := "554"
+var (
+	listen            = flag.String("listen", ":554", "Listen host:port")
+	allowedHostRegexp = flag.String("allowed-host-regexp", "", "Hosts which to allow proxying to")
+)
 
-	ln, err := net.Listen("tcp", ":"+port)
+func main() {
+	flag.Parse()
+
+	var hostRegexp *regexp.Regexp
+	if *allowedHostRegexp != "" {
+		var err error
+		hostRegexp, err = regexp.Compile(*allowedHostRegexp)
+		if err != nil {
+			log.Printf("Invalid allowed-host-regexp: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
+	ln, err := net.Listen("tcp", *listen)
 	if err != nil {
-		log.Printf("Could not listen on port %d. %s\n", port, err.Error())
+		log.Printf("Could not listen on %d. %s\n", *listen, err.Error())
 		os.Exit(1)
 	}
 	log.Printf("Listening on %s\n", ln.Addr().String())
@@ -27,13 +43,13 @@ func main() {
 			log.Println("Error accepting connection: ", err.Error())
 		} else {
 			log.Printf("New Connection from %s\n", conn.RemoteAddr().String())
-			go handleFrontend(conn)
+			go handleFrontend(conn, hostRegexp)
 		}
 	}
 
 }
 
-func handleFrontend(conn net.Conn) {
+func handleFrontend(conn net.Conn, hostRegexp *regexp.Regexp) {
 	clog := log.New(os.Stdout, fmt.Sprintf("[%s] ", conn.RemoteAddr().String()), log.LstdFlags)
 
 	buf_reader := bufio.NewReader(conn)
@@ -49,8 +65,7 @@ func handleFrontend(conn net.Conn) {
 	request_regex := regexp.MustCompile(`([A-Z]*) (.*) RTSP/(.*)\r\n`)
 	request_params := request_regex.FindStringSubmatch(request_line)
 	if len(request_params) != 4 {
-		clog.Printf("Could not understand request: %s", request_line)
-		clog.Println("Closing")
+		clog.Printf("(Closing) Could not understand request: %s", request_line)
 		conn.Close()
 		return
 	}
@@ -63,15 +78,13 @@ func handleFrontend(conn net.Conn) {
 	//clog.Printf("Request: %s", request_str) // Already has /n
 
 	if method != "OPTIONS" {
-		clog.Printf("Received method %s instead of OPTIONS\n", request_params[0])
-		clog.Println("Closing")
+		clog.Printf("(Closing) Received method %s instead of OPTIONS\n", request_params[0])
 		conn.Close()
 		return
 	}
 
 	if rtsp_version != "1.0" {
-		clog.Printf("Received RTSP version %s instead of 1.0\n", request_params[3])
-		clog.Println("Closing")
+		clog.Printf("(Closing) Received RTSP version %s instead of 1.0\n", request_params[3])
 		conn.Close()
 		return
 	}
@@ -79,21 +92,26 @@ func handleFrontend(conn net.Conn) {
 	// Parse the URL and ensure there are no errors.
 	url, err := url.Parse(uri)
 	if err != nil {
-		clog.Printf("Could not parse request uri: %s. %s\n", uri, err.Error())
-		clog.Println("Closing")
+		clog.Printf("(Closing) Could not parse request uri: %s. %s\n", uri, err.Error())
 		conn.Close()
 		return
 	}
 
 	hostport := strings.Split(url.Host, ":")
-	forward_host := hostport[0] + ":554"
+	host := hostport[0]
+	if hostRegexp != nil && hostRegexp.FindString(host) != host {
+		clog.Printf("(Closing) Unallowed host: %v", host)
+		conn.Close()
+		return
+	}
+
+	forward_host := host + ":554"
 	clog.Println("Forwarding to ", forward_host)
 
 	forward_conn, err := net.Dial("tcp", forward_host)
 	if err != nil {
-		clog.Printf("Could not connect to forward host %s. %s\n",
+		clog.Printf("(Closing) Could not connect to forward host %s. %s\n",
 			forward_host, err.Error())
-		clog.Println("Closing")
 		conn.Close()
 		return
 	}
@@ -101,8 +119,7 @@ func handleFrontend(conn net.Conn) {
 	// Write the request line forward
 	_, err = forward_conn.Write([]byte(request_line))
 	if err != nil {
-		clog.Printf("Could not write forward request: %s\n", err)
-		clog.Println("Closing")
+		clog.Printf("(Closing) Could not write forward request: %s\n", err)
 		conn.Close()
 		forward_conn.Close()
 		return
