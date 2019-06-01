@@ -99,6 +99,13 @@ func handleFrontend(conn net.Conn, hostRegexp *regexp.Regexp) {
 
 	hostport := strings.Split(url.Host, ":")
 	host := hostport[0]
+
+	if host == "" {
+		clog.Printf("(Closing) No host given")
+		conn.Close()
+		return
+	}
+
 	if hostRegexp != nil && hostRegexp.FindString(host) != host {
 		clog.Printf("(Closing) Unallowed host: %v", host)
 		conn.Close()
